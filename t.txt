@@ -1,0 +1,235 @@
+Pour réaliser ce projet Warframe News + Feedback, nous allons étendre l'architecture précédente. Nous utiliserons l'API publique de WarframeStat.us pour les actualités et notre json-server pour stocker les avis de manière persistante.
+1. Architecture du projet
+Plaintext
+warframe-app/
+├── db.json               # Stockage des avis (feedbacks)
+├── src/
+│   ├── services/
+│   │   ├── WarframeService.js  # Appels API Warframe
+│   │   └── FeedbackService.js  # Appels API JSON-Server
+│   ├── views/
+│   │   ├── NewsView.vue       # Liste des news
+│   │   └── FeedbackView.vue   # Formulaire + Liste des avis
+│   └── components/
+│       └── NewsCard.vue       # Affichage d'une news
+________________________________________
+2. Configuration du Backend (db.json)
+Ajoutez une section feedbacks dans votre fichier db.json à la racine :
+JSON
+{
+  "events": [],
+  "feedbacks": [
+    {
+      "id": "1",
+      "patchTitle": "Update 35: Whispers in the Walls",
+      "username": "TennoSK",
+      "comment": "Incroyable mise à jour !",
+      "rating": 5
+    }
+  ]
+}
+________________________________________
+3. Les Services (API)
+src/services/WarframeService.js Nous utilisons l'API "Worldstate" qui est gratuite et ne nécessite pas de clé API.
+JavaScript
+import axios from 'axios'
+
+const apiClient = axios.create({
+  baseURL: 'https://api.warframestat.us/pc',
+  headers: { 'Accept-Language': 'fr' } // Pour avoir les news en français si possible
+})
+
+export default {
+  getNews() {
+    return apiClient.get('/news')
+  }
+}
+src/services/FeedbackService.js
+JavaScript
+import axios from 'axios'
+
+const apiClient = axios.create({
+  baseURL: 'http://localhost:3000',
+})
+
+export default {
+  getFeedbacks() { return apiClient.get('/feedbacks') },
+  postFeedback(feedback) { return apiClient.post('/feedbacks', feedback) }
+}
+________________________________________
+4. Les Composants et Vues
+src/components/NewsCard.vue
+Extrait de code
+<template>
+  <div class="card mb-3 shadow-sm h-100">
+    <img :src="news.imageLink" class="card-img-top" alt="news image" style="height: 150px; object-fit: cover;">
+    <div class="card-body d-flex flex-column">
+      <h6 class="card-title">{{ news.message }}</h6>
+      <p class="text-muted small">{{ new Date(news.date).toLocaleDateString() }}</p>
+      <div class="mt-auto d-flex justify-content-between align-items-center">
+        <a :href="news.link" target="_blank" class="btn btn-sm btn-primary">Lire l'article</a>
+        <router-link :to="{ name: 'feedback', query: { title: news.message }}" class="btn btn-sm btn-outline-secondary">
+          Avis
+        </router-link>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+defineProps(['news'])
+</script>
+src/views/NewsView.vue
+Extrait de code
+<template>
+  <div class="container py-4">
+    <h1 class="mb-4">Warframe News</h1>
+    <div v-if="loading" class="spinner-border text-primary"></div>
+    <div class="row row-cols-1 row-cols-md-3 g-4">
+      <div class="col" v-for="item in newsList" :key="item.id">
+        <NewsCard :news="item" />
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import WarframeService from '@/services/WarframeService'
+import NewsCard from '@/components/NewsCard.vue'
+
+const newsList = ref([])
+const loading = ref(true)
+
+onMounted(async () => {
+  try {
+    const res = await WarframeService.getNews()
+    // On trie pour avoir les plus récentes en premier
+    newsList.value = res.data.reverse().slice(0, 12)
+  } finally {
+    loading.value = false
+  }
+})
+</script>
+src/views/FeedbackView.vue (Gestion des avis persistants)
+Extrait de code
+<template>
+  <div class="container mt-4 text-start">
+    <div class="row">
+      <div class="col-md-5">
+        <div class="card p-4 shadow-sm">
+          <h3>Donner mon avis</h3>
+          <form @submit.prevent="submitFeedback">
+            <div class="mb-3">
+              <label class="form-label">Titre de la News (Patch)</label>
+              <input v-model="form.patchTitle" class="form-control" readonly bg-light>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Pseudo Tenno</label>
+              <input v-model="form.username" class="form-control" required>
+            </div>
+            <div class="mb-3">
+              <label class="form-label">Commentaire</label>
+              <textarea v-model="form.comment" class="form-control" rows="3" required></textarea>
+            </div>
+            <button class="btn btn-success w-100">Envoyer l'avis</button>
+          </form>
+        </div>
+      </div>
+
+      <div class="col-md-7">
+        <h3>Avis de la communauté</h3>
+        <div v-for="f in feedbacks" :key="f.id" class="card mb-2 p-3">
+          <div class="d-flex justify-content-between">
+            <strong>{{ f.username }}</strong>
+            <span class="badge bg-secondary">{{ f.patchTitle.substring(0, 30) }}...</span>
+          </div>
+          <p class="mb-0 mt-2">{{ f.comment }}</p>
+        </div>
+      </div>
+    </div>
+  </div>
+</template>
+
+<script setup>
+import { ref, onMounted } from 'vue'
+import { useRoute } from 'vue-router'
+import FeedbackService from '@/services/FeedbackService'
+
+const route = useRoute()
+const feedbacks = ref([])
+const form = ref({
+  patchTitle: route.query.title || 'Général',
+  username: '',
+  comment: ''
+})
+
+const loadFeedbacks = async () => {
+  const res = await FeedbackService.getFeedbacks()
+  feedbacks.value = res.data.reverse()
+}
+
+const submitFeedback = async () => {
+  await FeedbackService.postFeedback(form.value)
+  form.value.comment = ''
+  loadFeedbacks()
+}
+
+onMounted(loadFeedbacks)
+</script>
+________________________________________
+5. Mise à jour du Router (src/router/index.js)
+N'oubliez pas d'ajouter ces deux nouvelles routes :
+JavaScript
+import NewsView from '../views/NewsView.vue'
+import FeedbackView from '../views/FeedbackView.vue'
+
+// ... dans le tableau des routes
+{ path: '/news', name: 'news', component: NewsView },
+{ path: '/feedback', name: 'feedback', component: FeedbackView },
+________________________________________
+6. Mode d'emploi final
+1.	Lancer le Backend : npx json-server --watch db.json --port 3000
+2.	Lancer le Frontend : npm run dev
+3.	Fonctionnement :
+o	Allez sur la page News.
+o	Cliquez sur "Lire l'article" pour ouvrir le site officiel de Warframe.
+o	Cliquez sur Avis : cela vous redirige vers le formulaire en remplissant automatiquement le titre de la news (patchTitle) pour que vous puissiez donner votre avis spécifique sur cette mise à jour.
+o	Les avis sont sauvegardés dans votre db.json et restent affichés même après actualisation.
+ 
+Pour ce projet spécifique avec l'API Warframe (WarframeStat.us), la bonne nouvelle est que vous n'avez pas besoin de clé API. C'est une API publique et gratuite qui ne nécessite pas d'authentification pour les requêtes standards.
+Cependant, si vous souhaitez utiliser une autre API à l'avenir (comme celle d'OpenWeatherMap vue précédemment) qui demande une clé, voici la procédure standard à suivre dans un projet Vite/Vue :
+1. Où placer la clé ?
+À la racine de votre projet (au même niveau que package.json et db.json), créez un fichier nommé .env.
+Collez votre clé à l'intérieur comme ceci :
+Extrait de code
+VITE_WARFRAME_API_KEY=votre_clef_ici
+Note : Le préfixe VITE_ est obligatoire pour que la clé soit exposée au code source.
+________________________________________
+2. Comment l'utiliser dans le code ?
+Dans vos fichiers de services (comme WarframeService.js), vous pouvez récupérer cette valeur via l'objet import.meta.env.
+Voici comment modifier votre service si une clé était nécessaire :
+JavaScript
+import axios from 'axios'
+
+// On récupère la clé depuis le fichier .env
+const API_KEY = import.meta.env.VITE_WARFRAME_API_KEY
+
+const apiClient = axios.create({
+  baseURL: 'https://api.warframestat.us/pc',
+  params: {
+    // Si l'API demande la clé en paramètre d'URL (ex: ?auth=...)
+    auth: API_KEY
+  }
+})
+
+// ... reste du code
+________________________________________
+3. Rappel sur la sécurité
+N'oubliez jamais :
+1.	Ne commitez pas votre fichier .env sur un dépôt public (GitHub).
+2.	Ajoutez .env à votre fichier .gitignore.
+3.	Pour l'API Warframe actuelle, le code que je vous ai donné fonctionne directement sans aucune configuration de clé, car elle est ouverte.
+Prochaine étape suggérée
+Votre projet est maintenant prêt à l'emploi. Souhaitez-vous que je vous aide à ajouter un filtre de recherche sur la page des News pour trouver un article par mot-clé ?
+
